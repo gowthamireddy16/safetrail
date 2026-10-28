@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SafeTrail: find a missing child fast</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400..800&display=swap" rel="stylesheet">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+--paper:#EEF1EC;--ink:#17262B;--panel:#fff;--zone:#DDE5DE;--line:#8FA79A;--signal:#0E7C7B;--on:#fff;--alert:#D2362B;--amber:#B87A00;--mute:#546A64}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--paper:#0F1A1D;--ink:#E6EEE9;--panel:#172529;--zone:#22363A;--line:#46666A;--signal:#3CC0BC;--on:#0F1A1D;--alert:#FF6B5E;--amber:#F0B73A;--mute:#9CB3AC}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 'Archivo',system-ui,sans-serif}
+.wrap{max-width:1040px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+h1{margin:0;font-size:30px;font-weight:800;font-stretch:70%;letter-spacing:.01em}
+h2{margin:0 0 8px;font-size:20px;font-weight:700;font-stretch:80%}
+p{margin:0 0 10px}
+.tabs{display:flex;border:2px solid var(--ink);border-radius:8px;overflow:hidden}
+.tabs button{background:none;border:0;color:var(--ink);padding:8px 16px;font:inherit;font-weight:600;cursor:pointer}
+.tabs button[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+.grid{display:grid;grid-template-columns:1.25fr 1fr;gap:16px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.map{width:100%;height:auto;display:block}
+.map g{cursor:pointer}.map text{font:600 11px 'Archivo',sans-serif;fill:var(--ink);pointer-events:none}
+.map g:focus-visible rect,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--signal);outline-offset:2px}
+label{display:block;font-weight:600;margin:8px 0 4px}
+input,select{width:100%;padding:10px;font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:6px}
+.btn{display:inline-block;margin-top:10px;padding:11px 18px;border:0;border-radius:8px;background:var(--signal);color:var(--on);font:inherit;font-weight:700;cursor:pointer}
+.btn.red{background:var(--alert);color:#fff}.btn.ghost{background:none;color:var(--ink);border:1px solid var(--line)}
+.tag{border:2px dashed var(--ink);border-radius:8px;padding:12px;text-align:center}
+.tag b{display:block;font-size:34px;font-stretch:75%;letter-spacing:.08em}
+.msg{min-height:24px;font-weight:600;color:var(--signal)}
+.bad{color:var(--alert)}.mute{color:var(--mute);font-size:14px}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 0;border-top:1px solid var(--line)}
+.pill{font-size:13px;font-weight:700;padding:2px 10px;border-radius:99px;border:1px solid currentColor}
+.otp{font-size:44px;font-weight:800;font-stretch:70%;letter-spacing:.2em;text-align:center}
+</style></head><body><div class="wrap">
+<header><h1>SafeTrail</h1>
+<div class="tabs" id="tabs"><button data-act="role" data-v="parent">Parent</button><button data-act="role" data-v="staff">Staff</button><button data-act="role" data-v="org">Organizer</button></div></header>
+<div id="app"></div>
+<p class="mute">Prototype. One browser plays all three roles. In the real build, each role signs in on its own phone and the data lives in Firebase.</p>
+</div>
+<script>
+const Z=[
+{id:'gA',n:'Gate A',x:10,y:150,w:70,h:60,g:1},{id:'gB',n:'Gate B',x:520,y:150,w:70,h:60,g:1},{id:'gC',n:'Gate C',x:265,y:300,w:70,h:50,g:1},
+{id:'food',n:'Food court',x:100,y:25,w:100,h:80},{id:'stage',n:'Main stage',x:215,y:25,w:170,h:80},{id:'play',n:'Play area',x:400,y:25,w:100,h:80},
+{id:'wW',n:'West walkway',x:100,y:130,w:140,h:110},{id:'ctr',n:'Central plaza',x:250,y:130,w:100,h:110},{id:'wE',n:'East walkway',x:360,y:130,w:140,h:110},
+{id:'park',n:'Parking shuttle',x:100,y:255,w:140,h:80},{id:'wc',n:'Restrooms',x:360,y:255,w:140,h:80}];
+const zn=id=>Z.find(z=>z.id==id).n, cx=z=>z.x+z.w/2, cy=z=>z.y+z.h/2;
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let S=(()=>{try{return JSON.parse(localStorage.getItem('st1'))}catch(e){return null}})()||{child:null,c:null,sight:[],gates:{},role:'parent',pick:null,msg:'',bad:0};
+const save=()=>{try{localStorage.setItem('st1',JSON.stringify(S))}catch(e){}};
+const ago=t=>Math.max(0,Math.round((Date.now()-t)/60000));
+const agoTxt=t=>{const m=ago(t);return m<1?'just now':m+' min ago'};
+function heat(){const h={};Z.forEach(z=>h[z.id]=0);const ev=S.sight.slice();if(S.c)ev.push({zone:S.c.zone,t:S.c.t,w:1.5});
+ev.forEach(e=>{const w=(e.w||1)*Math.exp(-ago(e.t)/10),a=Z.find(z=>z.id==e.zone);
+Z.forEach(b=>{const d=Math.hypot(cx(a)-cx(b),cy(a)-cy(b));if(b.id==a.id)h[b.id]+=w;else if(d<140)h[b.id]+=w*.35})});return h}
+function map(pick){const h=heat(),m=Math.max(...Object.values(h),.01),open=S.c&&S.c.status=='open';
+return`<svg class="map" viewBox="0 0 600 360" role="group" aria-label="Venue map">`+Z.map(z=>{
+const a=open?Math.min(.8,h[z.id]/m*.8):0,sel=S.pick==z.id;
+return`<g ${pick?`data-act="pick" data-z="${z.id}" role="button" tabindex="0" aria-label="${z.n}"`:''}>
+<rect x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="6" fill="var(--zone)" stroke="${sel?'var(--signal)':'var(--line)'}" stroke-width="${sel?4:1.5}" ${z.g?'stroke-dasharray="5 3"':''}/>
+<rect x="${z.x}" y="${z.y}" width="${z.w}" height="${z.h}" rx="6" fill="var(--alert)" fill-opacity="${a}" pointer-events="none"/>
+<text x="${cx(z)}" y="${cy(z)+4}" text-anchor="middle">${z.n}</text></g>`}).join('')
++(open?(()=>{const z=Z.find(q=>q.id==S.c.zone);return`<circle cx="${cx(z)}" cy="${z.y+12}" r="7" fill="var(--ink)"/><text x="${cx(z)+12}" y="${z.y+16}" style="font-size:10px">last seen</text>`})():'')+`</svg>`}
+function top3(){const h=heat();return Z.filter(z=>!z.g||1).sort((a,b)=>h[b.id]-h[a.id]).slice(0,3).filter(z=>h[z.id]>0.05)}
+const note=()=>`<p class="msg ${S.bad?'bad':''}" role="status">${esc(S.msg)}</p>`;
+function parent(){let h='';
+if(!S.child)return`<div class="card" style="max-width:480px"><h2>Register your child</h2><p class="mute">Do this at the entrance. We keep only what staff need to find your child, and delete it after the event.</p>
+<label for="cn">Child’s name</label><input id="cn"><label for="ca">Age</label><input id="ca" type="number" min="1" max="17"><label for="cc">What they’re wearing</label><input id="cc" placeholder="Red T-shirt, blue shorts">
+<label style="font-weight:400"><input type="checkbox" id="ok" style="width:auto"> I agree to share these details with event staff only</label>
+<button class="btn" data-act="create">Create wristband</button>${note()}</div>`;
+const c=S.c,k=S.child;
+h+=`<div class="card"><h2>${esc(k.name)}’s wristband</h2><div class="tag"><b>${k.token}</b><span class="mute">Staff scan this code. It holds no personal details.</span></div></div>`;
+if(!c){h+=`<div class="grid"><div class="card"><h2>Where did you last see ${esc(k.name)}?</h2>${map(1)}</div><div class="card"><p>Tap the area on the map, then report. Staff are alerted straight away.</p><p><b>${S.pick?zn(S.pick):'No area picked yet'}</b></p><button class="btn red" data-act="report">Report ${esc(k.name)} missing</button>${note()}</div></div>`}
+else if(c.status=='open'){const t=top3()[0];h+=`<div class="card"><h2>Staff are searching</h2><p>Report opened ${agoTxt(c.t)}. Last seen: ${zn(c.zone)}.</p><p>Sightings reported by staff: <b>${S.sight.length}</b>${t?`<br>Search is focused near: <b>${t.n}</b>`:''}</p><p class="mute">Stay at ${zn(c.zone)} or the nearest help desk so staff can reach you. You only see counts here. Sighting details stay with staff.</p></div>`}
+else if(c.status=='found'){h+=`<div class="card"><h2>${esc(k.name)} has been found</h2><p>A staff member is with them. Show this code to the staff member before you take your child:</p><div class="otp">${c.otp}</div></div>`}
+else h+=`<div class="card"><h2>Reunited</h2><p>Handover confirmed. All data for this case will be deleted after the event.</p><button class="btn ghost" data-act="reset">Start over</button></div>`;
+return h}
+function staff(){const c=S.c,k=S.child;let h='';
+if(!c||c.status!='open'&&c.status!='found')h+=`<div class="card"><h2>No active alerts</h2><p class="mute">When a parent reports a missing child, the alert appears here.</p></div>`;
+if(c&&c.status=='open')h+=`<div class="card" style="border-color:var(--alert)"><h2 class="bad">Missing child alert</h2><p><b>${esc(k.name)}</b>, age ${esc(k.age)}. ${esc(k.cloth)}.<br>Last seen: ${zn(c.zone)}, ${agoTxt(c.t)}.</p><p class="mute">Photo is shown only after staff sign-in (not in this demo).</p></div>`;
+h+=`<div class="grid"><div class="card"><h2>Report a sighting</h2>${map(1)}</div><div>
+<div class="card"><p><b>${S.pick?zn(S.pick):'Tap the area where you saw the child'}</b></p><label for="sm">When</label><select id="sm"><option value="0">Just now</option><option value="5">5 min ago</option><option value="10">10 min ago</option><option value="20">20 min ago</option></select>
+<button class="btn" data-act="sight">Report sighting</button></div>
+<div class="card"><h2>Found a child?</h2><label for="tk">Wristband code</label><input id="tk" placeholder="ST-1234"><button class="btn" data-act="scan">Scan wristband</button>`;
+if(c&&c.status=='found')h+=`<hr><p>Ask the parent for their 4-digit code.</p><input id="ot" inputmode="numeric" maxlength="4"><button class="btn" data-act="confirm">Confirm handover</button>`;
+return h+`${note()}</div></div></div>`}
+function org(){const h=heat(),c=S.c,k=S.child;let o=`<div class="grid"><div class="card"><h2>Live search map</h2>${map(0)}<p class="mute">Darker red means a more likely area. Recent sightings count more, and old ones fade out.</p></div><div>`;
+o+=`<div class="card"><h2>Case</h2>`+(c?`<p><b>${esc(k.name)}</b>, ${esc(k.age)}: <span class="pill">${c.status=='open'?'Searching':c.status=='found'?'Found, awaiting handover':'Reunited'}</span></p><p>Opened ${agoTxt(c.t)}. Staff alerted: instantly.</p>`:'<p class="mute">No open case.</p>')+`</div>`;
+if(c&&c.status=='open'){o+=`<div class="card"><h2>Most likely areas</h2>`+(top3().map(z=>`<div class="row"><span>${z.n}</span><b>${Math.round(h[z.id]/Math.max(...Object.values(h))*100)}%</b></div>`).join('')||'<p class="mute">Waiting for sightings.</p>')+`</div>
+<div class="card"><h2>Gate watch</h2>`+Z.filter(z=>z.g).map(z=>`<div class="row"><span>${z.n}</span><button class="btn ${S.gates[z.id]?'red':'ghost'}" style="margin:0" data-act="gate" data-z="${z.id}">${S.gates[z.id]?'Gate staff alerted':'Alert gate staff'}</button></div>`).join('')+`</div>
+<div class="card"><h2>Sightings log</h2>`+(S.sight.slice().sort((a,b)=>b.t-a.t).map(s=>`<div class="row"><span>${zn(s.zone)}</span><span class="mute">${agoTxt(s.t)}</span></div>`).join('')||'<p class="mute">None yet.</p>')+`</div>`}
+return o+`<button class="btn" data-act="demo">Load demo case</button> <button class="btn ghost" data-act="reset">Reset</button></div></div>`}
+function render(){document.querySelectorAll('#tabs button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.v==S.role));
+$app.innerHTML=S.role=='parent'?parent():S.role=='staff'?staff():org();save()}
+const $app=document.getElementById('app'),val=id=>(document.getElementById(id)||{}).value||'';
+function say(m,bad){S.msg=m;S.bad=bad?1:0}
+document.addEventListener('click',e=>{const el=e.target.closest('[data-act]');if(!el)return;const a=el.dataset.act;
+if(a=='role'){S.role=el.dataset.v;S.msg='';S.bad=0;S.pick=null}
+else if(a=='pick')S.pick=el.dataset.z;
+else if(a=='create'){const n=val('cn').trim(),g=val('ca'),cl=val('cc').trim();
+if(!n||!g||!cl)say('Fill in name, age and clothing.',1);else if(!document.getElementById('ok').checked)say('Please agree to share these details with staff.',1);
+else{S.child={name:n,age:g,cloth:cl,token:'ST-'+(1000+Math.random()*9000|0)};say('')}}
+else if(a=='report'){if(!S.pick)say('Tap the last-seen area on the map first.',1);else{S.c={zone:S.pick,t:Date.now(),status:'open',otp:null};S.sight=[];S.gates={};S.pick=null;say('')}}
+else if(a=='sight'){if(!S.c||S.c.status!='open')say('No active alert to report against.',1);else if(!S.pick)say('Tap the area on the map first.',1);
+else{S.sight.push({zone:S.pick,t:Date.now()-(+val('sm'))*60000});S.pick=null;say('Sighting reported. The map is updated.')}}
+else if(a=='scan'){const t=val('tk').trim().toUpperCase();if(S.c&&S.c.status=='open'&&S.child&&t==S.child.token){S.c.status='found';S.c.otp=String(1000+Math.random()*9000|0);say('Match found. The parent has been notified. Ask them for their code.')}else say('No open case matches that code.',1)}
+else if(a=='confirm'){if(val('ot').trim()==S.c.otp){S.c.status='done';say('Handover confirmed.')}else say('Code does not match. Do not release the child.',1)}
+else if(a=='gate')S.gates[el.dataset.z]=!S.gates[el.dataset.z];
+else if(a=='demo'){const now=Date.now();S.child={name:'Aarav',age:'6',cloth:'Red T-shirt, blue shorts',token:'ST-4821'};
+S.c={zone:'food',t:now-14*60000,status:'open',otp:null};S.sight=[{zone:'wW',t:now-9*60000},{zone:'ctr',t:now-5*60000},{zone:'wE',t:now-2*60000}];S.gates={};say('')}
+else if(a=='reset'){S={child:null,c:null,sight:[],gates:{},role:'parent',pick:null,msg:'',bad:0}}
+render()});
+document.addEventListener('keydown',e=>{if(e.key=='Enter'&&e.target.dataset&&e.target.dataset.act=='pick'){e.target.dispatchEvent(new MouseEvent('click',{bubbles:true}))}});
+render();
+</script></body></html>
